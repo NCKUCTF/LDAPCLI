@@ -1,0 +1,12 @@
+dn: cn=nckuctf,cn=schema,cn=config
+objectClass: olcSchemaConfig
+cn: nckuctf
+olcAttributeTypes: ( 1.3.6.1.4.1.24550.500.1.1.1.12 NAME 'studentID' DESC 
+ 'NCKU Student ID' EQUALITY octetStringMatch ORDERING octetStringOrderingMatch 
+ SYNTAX 1.3.6.1.4.1.1466.115.121.1.40 SINGLE-VALUE )
+olcAttributeTypes: ( 1.3.6.1.4.1.24550.500.1.1.1.13 NAME 'discordID' DESC 
+ 'Discord ID' EQUALITY numericStringMatch ORDERING numericStringOrderingMatch 
+ SUBSTR numericStringSubstringsMatch SYNTAX 1.3.6.1.4.1.1466.115.121.1.36 SINGLE-VALUE )
+olcObjectClasses: ( 1.3.6.1.4.1.24550.500.1.1.2.0 NAME 'nckuctfAccount' 
+ SUP top AUXILIARY DESC 'For NCKUCTF club member' MAY ( studentID $ discordID ) )
+
