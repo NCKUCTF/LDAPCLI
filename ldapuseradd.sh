@@ -19,12 +19,16 @@ Options:
   -u, --uid UID                 user ID of the new account
   -U, --user-group              create a group with the same name as the user
   -e, --email EMAIL             Set user email
-  -f, --bindfile				set url,binddn,bindpasswd with file
-  -H, --url URL					LDAP Uniform Resource Identifier(s)
-  -D, --binddn DN				bind DN
-  -w, --bindpasswd PASSWORD		bind password"
+      --discordID DISCORDID     Set user discordID
+      --studentID STUDENTID     Set user studentID
+  -n, --displayName NAME        User real name
+  -A, --pveACLs                 Set user pve acl. format: <path>:<rule>,/pool/PVEuser:PVEVMAdmin,...
+  -f, --bindfile                set url,binddn,bindpasswd with file
+  -H, --url URL                 LDAP Uniform Resource Identifier(s)
+  -D, --binddn DN               bind DN
+  -w, --bindpasswd PASSWORD     bind password" 1>&2
 
-	exit 0
+	exit 1
 }
 
 argnum=$#
@@ -41,12 +45,16 @@ homedir=""
 gid=""
 uid=""
 email=""
+discordID=""
+studentID=""
+pveACLs='[]'
 groups=""
 genusergroup=true
 shell=/bin/bash
 url=""
 binddn=""
 bindpasswd=""
+displayName=""
 
 
 for a in $(seq 1 1 $argnum)
@@ -85,6 +93,22 @@ do
                 -e|--email)
                         shift
                         email=$1
+                        ;;
+                --discordID)
+                        shift
+                        discordID=$1
+                        ;;
+                --studentID)
+                        shift
+                        studentID=$1
+                        ;;
+                -A|--pveACLs)
+                        shift
+                        pveACLs="$(echo "\"$1\"" | jq -c 'split(",") | map({"path": split(":")[0], "rule": split(":")[1]})')"
+                        ;;
+                -n|--displayName)
+                        shift
+                        displayName=$1
                         ;;
                 -p|--password)
                         shift
@@ -144,6 +168,11 @@ fi
 if [ "$bindpasswd" = "" ]
 then
 	read -p "Enter LDAP Password: " -s bindpasswd
+fi
+
+if [ "$displayName" == "" ]
+then
+    displayName=$username
 fi
 
 if [ "$url" != "" ]
@@ -216,6 +245,8 @@ objectClass: inetOrgPerson
 objectClass: posixAccount
 objectClass: shadowAccount
 objectClass: sshAccount
+objectClass: pveobject
+objectClass: nckuctfAccount
 cn: $username
 sn: $username
 uid: $username
@@ -225,6 +256,17 @@ uidNumber: $uid
 gidNumber: $gid
 homeDirectory: $homedir" | ldapadd -x $ldapurl -D "$binddn" -w "$bindpasswd"
 
+smbldap-usermod -a "$username"
+echo "$userpassword
+$userpassword" | smbldap-passwd "$username"
+
+smbldap-usermod -H '[UX]' "$username"
+
+echo "dn: cn=$username,ou=people,$basedn
+changetype: modify
+replace: displayName
+displayName: $displayName" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+
 if [ "$email" != "" ]
 then
 	echo "dn: cn=$username,ou=people,$basedn
@@ -232,6 +274,30 @@ changetype: modify
 replace: mail
 mail: $email" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
 fi
+
+if [ "$studentID" != "" ]
+then
+	echo "dn: cn=$username,ou=people,$basedn
+changetype: modify
+replace: studentID
+studentID: $studentID" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+fi
+
+if [ "$discordID" != "" ]
+then
+	echo "dn: cn=$username,ou=people,$basedn
+changetype: modify
+replace: discordID
+discordID: $discordID" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+fi
+
+for a in $(seq 0 1 $(echo "$pveACLs" | jq '. | length - 1'))
+do
+	echo "dn: cn=$username,ou=people,$basedn
+changetype: modify
+add: pveacl
+pveacl: $(echo "$pveACLs" | jq -c ".[$a]")" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+done
 
 gidgroupname=$(ldapsearch -x $ldapurl -D "$binddn" -w "$bindpasswd" -b "$basedn" "(&(objectClass=posixGroup)(gidNumber=$gid))" -LLL | grep -P "^cn:" | awk '{print $2}')
 

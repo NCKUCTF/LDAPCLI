@@ -8,6 +8,7 @@ Options:
   -g, --gid GID                 use GID for the new group
   -h, --help                    display this help message and exit
   -m, --members USERS			list of users of the new group
+  -A, --pveACLs                 Set user pve acl. format: <path>:<rule>,/pool/PVEuser:PVEVMAdmin,...
   -f, --bindfile				set url,binddn,bindpasswd with file
   -H, --url URL					LDAP Uniform Resource Identifier(s)
   -D, --binddn DN				bind DN
@@ -28,6 +29,7 @@ users=""
 url=""
 binddn=""
 bindpasswd=""
+pveACLs='[]'
 
 for a in $(seq 1 1 $argnum)
 do
@@ -43,6 +45,10 @@ do
                 -m|--members)
                         shift
                         users=$(echo $1 | sed "s/,/ /g")
+                        ;;
+                -A|--pveACLs)
+                        shift
+                        pveACLs="$(echo "\"$1\"" | jq -c 'split(",") | map({"path": split(":")[0], "rule": split(":")[1]})')"
                         ;;
 				-f|--bindfile)
 						shift
@@ -120,6 +126,22 @@ objectClass: posixGroup
 objectClass: memberGroup
 cn: $groupname
 gidNumber: $gid" | ldapadd -x $ldapurl -D "$binddn" -w "$bindpasswd"
+
+if [ $(echo "$pveACLs" | jq '. | length') -gt 0 ]
+then
+	echo "dn: cn=$groupname,ou=groups,$basedn
+changetype: modify
+add: objectClass
+objectClass: pveobject" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+fi
+
+for a in $(seq 0 1 $(echo "$pveACLs" | jq '. | length - 1'))
+do
+	echo "dn: cn=$groupname,ou=groups,$basedn
+changetype: modify
+add: pveacl
+pveacl: $(echo "$pveACLs" | jq -c ".[$a]")" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+done
 
 for a in $users
 do

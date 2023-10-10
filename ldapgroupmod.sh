@@ -7,12 +7,17 @@ printhelp()
 Options:
   -g, --gid GID                 change the group ID to GID
   -M, --members USERS           new list of supplementary USERS
+  -A, --pveACLs                 Set user pve acl. format: <path>:<rule>,/pool/PVEuser:PVEVMAdmin,...
   -a, --append                  append the USERS to this group
-                                mentioned by the -M option without removing
-                                other users
+                                mentioned by the -M option or
+                                append the pveACLs to this group
+                                mentioned by the -A option without removing
+                                other users or pveACLs
   -r, --remove                  remove the USERS to this group
-                                mentioned by the -M option without appending
-                                other users
+                                mentioned by the -M option or
+                                remove the pveACLs to this group
+                                mentioned by the -A option without appending
+                                other users or pveACLs
   -h, --help                    display this help message and exit
   -n, --new-name NEW_GROUP      change the name to NEW_GROUP
   -f, --bindfile				set url,binddn,bindpasswd with file
@@ -33,7 +38,9 @@ groupname=""
 newgroupname=""
 gid=""
 members=""
+pveACLs='[]'
 usersmode="replace"
+pveACLsmode="replace"
 url=""
 binddn=""
 bindpasswd=""
@@ -53,11 +60,27 @@ do
                         shift
                         members=" $(echo $1 | sed "s/,/ /g") "
                         ;;
+                -A|--pveACLs)
+                        shift
+                        pveACLs="$(echo "\"$1\"" | jq -c 'split(",") | map({"path": split(":")[0], "rule": split(":")[1]})')"
+                        ;;
                 -a|--append)
-                        usersmode="add"
+                        if [ $2 == "-M" ] || [ $2 == "--members" ]
+                        then
+                            usersmode="add"
+                        elif [ $2 == "-A" ] || [ $2 == "--pveACLs" ]
+                        then
+                            pveACLsmode="add"
+                        fi
                         ;;
                 -r|--remove)
-                        usersmode="delete"
+                        if [ $2 == "-M" ] || [ $2 == "--members" ]
+                        then
+                            usersmode="delete"
+                        elif [ $2 == "-A" ] || [ $2 == "--pveACLs" ]
+                        then
+                            pveACLsmode="delete"
+                        fi
                         ;;
 				-n|--new-name)
                         shift
@@ -172,6 +195,25 @@ member: cn=$a,ou=people,$basedn"
 	echo "$modifybase" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
 fi
 
+if [ $(echo "$pveACLs" | jq '. | length') -gt 0 ]
+then
+	echo "dn: cn=$groupname,ou=groups,$basedn
+changetype: modify
+add: objectClass
+objectClass: pveobject" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+
+	modifybase="dn: cn=$groupname,ou=groups,$basedn
+changetype: modify
+${pveACLsmode}: pveacl"
+
+    for a in $(seq 0 1 $(echo "$pveACLs" | jq '. | length - 1'))
+    do
+        modifybase="$modifybase
+pveacl: $(echo "$pveACLs" | jq -c ".[$a]")"
+    done
+    echo "$modifybase" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+fi
+
 if [ "$newgroupname" != "" ]
 then
 	echo "dn: cn=$groupname,ou=groups,$basedn
@@ -183,4 +225,5 @@ dn: cn=$newgroupname,ou=groups,$basedn
 changetype: modify
 replace: cn
 cn: $newgroupname" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+    groupname=$newgroupname
 fi
