@@ -190,16 +190,26 @@ then
 	ldapurl="-H $url"
 fi
 
-newpasswd=""
 if $promptpassword
 then
-	newpasswd=$(slappasswd)
-elif [ "$password" != "" ]
-then
-	newpasswd=$(slappasswd -s $password)
+    read -p "New password: " -s password
+    echo
+    read -p "Re-enter new password: " -s checkpassword
+    echo
+    if [ "$password" != "$checkpassword" ]
+    then
+        echo "Password verification failed." 1>&2
+        exit 0
+    fi
 fi
 
-if $promptpassword && [ "$userpassword" = "" ]
+newpasswd=""
+if [ "$password" != "" ]
+then
+    newpasswd=$(slappasswd -s $password)
+fi
+
+if $promptpassword && [ "$newpasswd" = "" ]
 then
 	exit 0
 fi
@@ -246,6 +256,10 @@ then
 changetype: modify
 replace: userPassword
 userPassword: $newpasswd" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+    smbldap-usermod -a "$username"
+    echo "$password
+$password" | smbldap-passwd "$username"
+    smbldap-usermod -H '[UX]' "$username"
 fi
 
 if [ "$uid" != "" ]

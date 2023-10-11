@@ -180,17 +180,20 @@ then
 	ldapurl="-H $url"
 fi
 
-if [ "$password" != "" ]
+if [ "$password" == "" ]
 then
-	userpassword="$(slappasswd -s $password)"
-else
-	userpassword="$(slappasswd)"
+    read -p "New password: " -s password
+    echo
+    read -p "Re-enter new password: " -s checkpassword
+    echo
+    if [ "$password" != "$checkpassword" ]
+    then
+        echo "Password verification failed." 1>&2
+        exit 0
+    fi
 fi
 
-if [ "$userpassword" = "" ]
-then
-	exit 0
-fi
+userpassword="$(slappasswd -s $password)"
 
 basedn=$(echo $(for a in $(echo "$binddn" | sed "s/,/ /g"); do  printf "%s," $(echo $a | grep dc=); done) | sed "s/^,//g" | sed "s/,$//g")
 
@@ -257,8 +260,8 @@ gidNumber: $gid
 homeDirectory: $homedir" | ldapadd -x $ldapurl -D "$binddn" -w "$bindpasswd"
 
 smbldap-usermod -a "$username"
-echo "$userpassword
-$userpassword" | smbldap-passwd "$username"
+echo "$password
+$password" | smbldap-passwd "$username"
 
 smbldap-usermod -H '[UX]' "$username"
 
