@@ -388,13 +388,11 @@ member: cn=$username,ou=people,$basedn" | ldapmodify -x $ldapurl -D "$binddn" -w
     unset IFS
 fi
 
-if [ "$delwgkeys" == "" ]
+if [ "$delwgkeys" != "" ]
 then
     allprivkey="$(echo "[$(ldapsearch -x $ldapurl -D "$binddn" -w "$bindpasswd" -b "$basedn" "(&(objectClass=wireguardAccount)(uid=$username))" wgkey -LLL | grep -P "^wgkey:" | sed 's/^wgkey:\s*//g' | tr '\n' ',' | sed 's/,\+$//g')]" | jq -c 'sort_by(.index)')"
     
-	modifybase="dn: cn=$username,ou=people,$basedn
-changetype: modify
-delete: wgkey"
+    run=false
 
     for a in $(seq 0 1 $(echo "$allprivkey" | jq '. | length - 1'))
     do
@@ -405,13 +403,24 @@ delete: wgkey"
         do
             if [ "$pubkey" == "$b" ]
             then
+                if ! $run
+                then
+	                modifybase="dn: cn=$username,ou=people,$basedn
+changetype: modify
+delete: wgkey"
+                    run=true
+                fi
                 modifybase="$modifybase
 wgkey: $(echo "$allprivkey" | jq -rc ".[$a]")"
             fi
         done
         unset IFS
     done
-    echo "$modifybase" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+
+    if $run
+    then
+        echo "$modifybase" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+    fi
 fi
 
 if $newwgkey && hash wg &>/dev/null
