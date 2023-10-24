@@ -8,6 +8,9 @@ Options:
   -g, --gid GROUP               force use GROUP as new primary group
   -G, --groups GROUPS           new list of supplementary GROUPS
   -A, --pveACLs                 Set user pve acl. format: <path>:<rule>,/pool/PVEuser:PVEVMAdmin,...
+  -k, --sshkeys KEYS            Your sshkeys for this account
+      --newwgkey                Append new wgkey for this account
+      --delwgkey PUBKEYS        Remove wgkeys for this account
   -a, --append                  append the user to the supplemental GROUPS
                                 mentioned by the -G or append sshkey to 
                                 this user mentioned by the -k or append pveACL to 
@@ -21,7 +24,6 @@ Options:
   -n, --displayName NAME        User real name
   -p, --password PASSWORD       password of the new password
   -P, --Password				prompt for new password 
-  -k, --sshkeys KEYS            Your sshkeys for this account
   -e, --email EMAIL             Set user email
   -s, --shell SHELL             new login shell for the user account
   -u, --uid UID                 new UID for the user account
@@ -52,6 +54,8 @@ pveACLsmode="replace"
 sshkeys=""
 groups=""
 pveACLs='[]'
+delwgkeys=''
+newwgkey='false'
 shell=""
 email=""
 url=""
@@ -77,6 +81,17 @@ do
                 -G|--groups)
                         shift
                         groups=$1  #$(echo $1 | sed "s/,/ /g")
+                        ;;
+                -A|--pveACLs)
+                        shift
+                        pveACLs="$(echo "\"$1\"" | jq -c 'split(",") | map({"path": split(":")[0], "rule": split(":")[1]})')"
+                        ;;
+                --newwgkey)
+                        newwgkey='true'
+                        ;;
+                --delwgkey)
+                        shift
+                        delwgkeys="$1"
                         ;;
                 -a|--append)
                         if [ $2 == "-G" ] || [ $2 == "--groups" ]
@@ -370,7 +385,61 @@ member: cn=$username,ou=people,$basedn" | ldapmodify -x $ldapurl -D "$binddn" -w
 					done
 					;;
 	esac
-    IFS=" "
+    unset IFS
+fi
+
+if [ "$delwgkeys" == "" ]
+then
+    allprivkey="$(echo "[$(ldapsearch -x $ldapurl -D "$binddn" -w "$bindpasswd" -b "$basedn" "(&(objectClass=wireguardAccount)(uid=$username))" wgkey -LLL | grep -P "^wgkey:" | sed 's/^wgkey:\s*//g' | tr '\n' ',' | sed 's/,\+$//g')]" | jq -c 'sort_by(.index)')"
+    
+	modifybase="dn: cn=$username,ou=people,$basedn
+changetype: modify
+delete: wgkey"
+
+    for a in $(seq 0 1 $(echo "$allprivkey" | jq '. | length - 1'))
+    do
+        pubkey="$(echo "$(echo "$allprivkey" | jq -rc ".[$a].key")" | wg pubkey)"
+
+        IFS=,
+        for b in $delwgkeys
+        do
+            if [ "$pubkey" == "$b" ]
+            then
+                modifybase="$modifybase
+wgkey: $(echo "$allprivkey" | jq -rc ".[$a]")"
+            fi
+        done
+        unset IFS
+    done
+    echo "$modifybase" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+fi
+
+if $newwgkey && hash wg &>/dev/null
+then
+	echo "dn: cn=$username,ou=people,$basedn
+changetype: modify
+add: objectClass
+objectClass: wireguardAccount" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+
+    privkey="$(wg genkey)"
+
+    allprivkey="$(echo "[$(ldapsearch -x $ldapurl -D "$binddn" -w "$bindpasswd" -b "$basedn" "(objectClass=wireguardAccount)" wgkey -LLL | grep -P "^wgkey:" | sed 's/^wgkey:\s*//g' | tr '\n' ',' | sed 's/,\+$//g')]" | jq -c 'sort_by(.index)')"
+
+    index=1
+    for a in $(seq 0 1 $(echo "$allprivkey" | jq '. | length - 1'))
+    do
+        if [ $(echo "$allprivkey" | jq -rc ".[$a].index") -eq $index ]
+        then
+            index=$(($index+1))
+        else
+            break
+        fi
+    done
+
+	echo "dn: cn=$username,ou=people,$basedn
+changetype: modify
+add: wgkey
+wgkey: $(echo "{\"index\":$index,\"key\":\"$privkey\"}" | jq -c)" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
 fi
 
 if [ $(echo "$pveACLs" | jq '. | length') -gt 0 ]

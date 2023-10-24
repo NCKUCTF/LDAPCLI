@@ -329,7 +329,7 @@ add: member
 member: cn=$username,ou=people,$basedn" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
 	fi
 done
-IFS=" "
+unset IFS
 
 for a in $sshkeys
 do
