@@ -1,0 +1,10 @@
+dn: cn=wireguard,cn=schema,cn=config
+objectClass: olcSchemaConfig
+cn: wireguard
+olcAttributeTypes: ( 1.3.6.1.4.1.24549.500.1.1.1.13 NAME 'wgkey' DESC 
+ 'Wireguard key for account' EQUALITY octetStringMatch SYNTAX 1.3.6.1.4.1
+ .1466.115.121.1.40 )
+olcObjectClasses: ( 1.3.6.1.4.1.24549.500.1.1.2.0 NAME 'wireguardAccount' 
+ SUP top AUXILIARY DESC 'Account with wireguard info' 
+ MAY ( wgkey ) )
+
