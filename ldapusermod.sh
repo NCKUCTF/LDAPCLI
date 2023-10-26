@@ -9,8 +9,6 @@ Options:
   -G, --groups GROUPS           new list of supplementary GROUPS
   -A, --pveACLs                 Set user pve acl. format: <path>:<rule>,/pool/PVEuser:PVEVMAdmin,...
   -k, --sshkeys KEYS            Your sshkeys for this account
-      --newwgkey                Append new wgkey for this account
-      --delwgkey PUBKEYS        Remove wgkeys for this account
   -a, --append                  append the user to the supplemental GROUPS
                                 mentioned by the -G or append sshkey to 
                                 this user mentioned by the -k or append pveACL to 
@@ -30,15 +28,47 @@ Options:
   -f, --bindfile				set url,binddn,bindpasswd with file
   -H, --url URL					LDAP Uniform Resource Identifier(s)
   -D, --binddn DN				bind DN
-  -w, --bindpasswd PASSWORD		bind password"
-	exit 0
+  -w, --bindpasswd PASSWORD		bind password" 1>&2
+	exit 1
+}
+
+groupset()
+{
+    cmd=$1
+    user=$2
+    dn=$3
+
+	echo "dn: $dn
+changetype: modify
+$cmd: memberUid
+memberUid: $user
+-
+$cmd: member
+member: cn=$user,ou=people,$basedn" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+}
+
+setuserattr()
+{
+    cmd=$1
+    attrname=$2
+    attrdata=$3
+    echo "dn: cn=$username,ou=people,$basedn
+changetype: modify
+$cmd: $attrname
+$attrname: $attrdata" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+}
+
+getattr()
+{
+    filter=$1
+    attrname=$2
+    ldapsearch -x $ldapurl -D "$binddn" -w "$bindpasswd" -b "$basedn" "$filter" "$attrname" -LLL | grep -P "^$attrname:" | cut -d ' ' -f 2-
 }
 
 argnum=$#
 if [ $argnum -eq 0 ]
 then
 	printhelp
-	exit 0
 fi
 
 username=""
@@ -55,7 +85,8 @@ sshkeys=""
 groups=""
 pveACLs='[]'
 delwgkeys=''
-newwgkey='false'
+newwgkey=''
+clearwgkey='false'
 shell=""
 email=""
 url=""
@@ -85,13 +116,6 @@ do
                 -A|--pveACLs)
                         shift
                         pveACLs="$(echo "\"$1\"" | jq -c 'split(",") | map({"path": split(":")[0], "rule": split(":")[1]})')"
-                        ;;
-                --newwgkey)
-                        newwgkey='true'
-                        ;;
-                --delwgkey)
-                        shift
-                        delwgkeys="$1"
                         ;;
                 -a|--append)
                         if [ $2 == "-G" ] || [ $2 == "--groups" ]
@@ -183,6 +207,11 @@ do
                         then
                                 break
                         fi
+                        if [ "$username" != "" ]
+                        then
+	                        echo "Bad args ..." 1>&2
+                            printhelp
+                        fi
 						username=$1
                         ;;
         esac
@@ -191,7 +220,7 @@ done
 
 if [ "$username" = "" ] || [ "$binddn" = "" ]
 then
-	echo "Please add your username and ldapbinddn."
+	echo "Please add your username and ldapbinddn." 1>&2
 	printhelp
 fi
 
@@ -232,45 +261,33 @@ fi
 
 basedn=$(echo $(for a in $(echo "$binddn" | sed "s/,/ /g"); do  printf "%s," $(echo $a | grep dc=); done) | sed "s/^,//g" | sed "s/,$//g")
 
-oldgid=$(ldapsearch -x $ldapurl -D "$binddn" -w "$bindpasswd" -b "$basedn" "(&(objectClass=person)(cn=$username))" -LLL | grep -P "^gidNumber:" | awk '{print $2}' | sed "s/[^0-9]//g")
+oldgid=$(getattr "(&(objectClass=person)(cn=$username))" gidNumber | sed "s/[^0-9]//g")
 
 if [ "$gid" != "100" ]
 then
-	gid=$(ldapsearch -x $ldapurl -D "$binddn" -w "$bindpasswd" -b "$basedn" "(&(objectClass=posixGroup)(|(gidNumber=$gid)(cn=$gid)))" -LLL | grep -P "^gidNumber:" | tail -n 1 | awk '{print $2}')
+    gid=$(getattr "(&(objectClass=posixGroup)(|(gidNumber=$gid)(cn=$gid)))" gidNumber | tail -n 1 | sed "s/[^0-9]//g")
 fi
 
 uid=$(echo $uid | sed "s/[^0-9]//g")
 
 if [ "$displayName" != "" ]
 then
-    echo "dn: cn=$username,ou=people,$basedn
-changetype: modify
-replace: displayName
-displayName: $displayName" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+    setuserattr replace displayName "$displayName"
 fi
 
 if [ "$homedir" != "" ]
 then
-	echo "dn: cn=$username,ou=people,$basedn
-changetype: modify
-replace: homeDirectory
-homeDirectory: $homedir" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+    setuserattr replace homeDirectory "$homedir"
 fi
 
 if [ "$shell" != "" ]
 then
-	echo "dn: cn=$username,ou=people,$basedn
-changetype: modify
-replace: loginShell
-loginShell: $shell" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+    setuserattr replace loginShell "$shell"
 fi
 
 if [ "$newpasswd" != "" ]
 then
-	echo "dn: cn=$username,ou=people,$basedn
-changetype: modify
-replace: userPassword
-userPassword: $newpasswd" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+    setuserattr replace userPassword "$newpasswd"
     smbldap-usermod -a "$username"
     echo "$password
 $password" | smbldap-passwd "$username"
@@ -279,49 +296,27 @@ fi
 
 if [ "$uid" != "" ]
 then
-	echo "dn: cn=$username,ou=people,$basedn
-changetype: modify
-replace: uidNumber
-uidNumber: $uid" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+    setuserattr replace uidNumber "$uid"
 fi
 
 if [ "$email" != "" ]
 then
-	echo "dn: cn=$username,ou=people,$basedn
-changetype: modify
-replace: mail
-mail: $email" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+    setuserattr replace mail "$email"
 fi
 
 if [ "$gid" != "" ]
 then
 	if [ "$oldgid" != "100" ]
 	then
-		echo "dn: $(ldapsearch -x $ldapurl -D "$binddn" -w "$bindpasswd" -b "$basedn" "(&(objectClass=posixGroup)(gidNumber=$oldgid))" -LLL | grep -P "^dn:" | awk '{print $2}')
-changetype: modify
-delete: memberUid
-memberUid: $username
--
-delete: member
-member: cn=$username,ou=people,$basedn" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+        groupset delete $username "$(getattr "(&(objectClass=posixGroup)(gidNumber=$oldgid))" dn)"
 	fi
 	
 	if [ "$gid" != "100" ]
 	then
-		echo "dn: $(ldapsearch -x $ldapurl -D "$binddn" -w "$bindpasswd" -b "$basedn" "(&(objectClass=posixGroup)(gidNumber=$gid))" -LLL | grep -P "^dn:" | awk '{print $2}')
-changetype: modify
-add: memberUid
-memberUid: $username
--
-add: member
-member: cn=$username,ou=people,$basedn" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+		groupset add $username "$(getattr "(&(objectClass=posixGroup)(gidNumber=$gid))" dn)"
 	fi
 
-	echo "dn: cn=$username,ou=people,$basedn
-changetype: modify
-replace: gidNumber
-gidNumber: $gid" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
-	
+    setuserattr replace gidNumber "$gid"
 	oldgid=$gid
 fi
 
@@ -329,58 +324,34 @@ if [ "$groups" != "" ]
 then
 	case "$groupsmode" in
 			replace)
-					for a in $(ldapsearch -x $ldapurl -D "$binddn" -w "$bindpasswd" -b "$basedn" "(&(objectClass=person)(uid=$username))" memberOf -LLL | grep -P "^memberOf:" | awk '{print $2}')
+					for a in $(getattr "(&(objectClass=person)(uid=$username))" memberOf)
 					do
-						if [ "$a" != "$(ldapsearch -x $ldapurl -D "$binddn" -w "$bindpasswd" -b "$basedn" "(&(objectClass=posixGroup)(gidNumber=$oldgid))" -LLL | grep -P "^dn:" | awk '{print $2}')" ]
+						if [ "$a" != "$(getattr "(&(objectClass=posixGroup)(gidNumber=$oldgid))" dn)" ]
 						then
-							echo "dn: $a
-changetype: modify
-delete: memberUid
-memberUid: $username
--
-delete: member
-member: cn=$username,ou=people,$basedn" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+							groupset delete $username "$a"
 						fi
 					done
 
                     IFS=,
 					for a in $groups
 					do
-						echo "dn: cn=$a,ou=groups,$basedn
-changetype: modify
-add: memberUid
-memberUid: $username
--
-add: member
-member: cn=$username,ou=people,$basedn" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+						groupset add $username "cn=$a,ou=groups,$basedn"
 					done
 					;;
 			add)
                     IFS=,
 					for a in $groups
 					do
-						echo "dn: cn=$a,ou=groups,$basedn
-changetype: modify
-add: memberUid
-memberUid: $username
--
-add: member
-member: cn=$username,ou=people,$basedn" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+						groupset add $username "cn=$a,ou=groups,$basedn"
 					done
 					;;
 			delete)
                     IFS=,
 					for a in $groups
 					do
-						if [ "$a" != "$(ldapsearch -x $ldapurl -D "$binddn" -w "$bindpasswd" -b "$basedn" "(&(objectClass=posixGroup)(gidNumber=$oldgid))" -LLL | grep -P "^cn:" | awk '{print $2}')" ]
+						if [ "$a" != "$(getattr "(&(objectClass=posixGroup)(gidNumber=$oldgid))" cn)" ]
 						then
-							echo "dn: cn=$a,ou=groups,$basedn
-changetype: modify
-delete: memberUid
-memberUid: $username
--
-delete: member
-member: cn=$username,ou=people,$basedn" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+							groupset delete $username "cn=$a,ou=groups,$basedn"
 						fi
 					done
 					;;
@@ -388,75 +359,9 @@ member: cn=$username,ou=people,$basedn" | ldapmodify -x $ldapurl -D "$binddn" -w
     unset IFS
 fi
 
-if [ "$delwgkeys" != "" ]
-then
-    allprivkey="$(echo "[$(ldapsearch -x $ldapurl -D "$binddn" -w "$bindpasswd" -b "$basedn" "(&(objectClass=wireguardAccount)(uid=$username))" wgkey -LLL | grep -P "^wgkey:" | sed 's/^wgkey:\s*//g' | tr '\n' ',' | sed 's/,\+$//g')]" | jq -c 'sort_by(.index)')"
-    
-    run=false
-
-    for a in $(seq 0 1 $(echo "$allprivkey" | jq '. | length - 1'))
-    do
-        pubkey="$(echo "$(echo "$allprivkey" | jq -rc ".[$a].key")" | wg pubkey)"
-
-        IFS=,
-        for b in $delwgkeys
-        do
-            if [ "$pubkey" == "$b" ]
-            then
-                if ! $run
-                then
-	                modifybase="dn: cn=$username,ou=people,$basedn
-changetype: modify
-delete: wgkey"
-                    run=true
-                fi
-                modifybase="$modifybase
-wgkey: $(echo "$allprivkey" | jq -rc ".[$a]")"
-            fi
-        done
-        unset IFS
-    done
-
-    if $run
-    then
-        echo "$modifybase" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
-    fi
-fi
-
-if $newwgkey && hash wg &>/dev/null
-then
-	echo "dn: cn=$username,ou=people,$basedn
-changetype: modify
-add: objectClass
-objectClass: wireguardAccount" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
-
-    privkey="$(wg genkey)"
-
-    allprivkey="$(echo "[$(ldapsearch -x $ldapurl -D "$binddn" -w "$bindpasswd" -b "$basedn" "(objectClass=wireguardAccount)" wgkey -LLL | grep -P "^wgkey:" | sed 's/^wgkey:\s*//g' | tr '\n' ',' | sed 's/,\+$//g')]" | jq -c 'sort_by(.index)')"
-
-    index=1
-    for a in $(seq 0 1 $(echo "$allprivkey" | jq '. | length - 1'))
-    do
-        if [ $(echo "$allprivkey" | jq -rc ".[$a].index") -eq $index ]
-        then
-            index=$(($index+1))
-        else
-            break
-        fi
-    done
-
-	echo "dn: cn=$username,ou=people,$basedn
-changetype: modify
-add: wgkey
-wgkey: $(echo "{\"index\":$index,\"key\":\"$privkey\"}" | jq -c)" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
-fi
-
 if [ $(echo "$pveACLs" | jq '. | length') -gt 0 ]
 then
-	echo "dn: cn=$username,ou=people,$basedn
-changetype: modify
-add: objectClass
-objectClass: pveobject" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+    setuserattr add objectClass "pveobject"
 
 	modifybase="dn: cn=$username,ou=people,$basedn
 changetype: modify
@@ -485,7 +390,7 @@ fi
 
 if [ "$newusername" != "" ]
 then
-	allgroups="$(ldapsearch -x $ldapurl -D "$binddn" -w "$bindpasswd" -b "$basedn" "(&(objectClass=person)(uid=$username))" memberOf -LLL | grep -P "^memberOf:" | awk '{print $2}')"
+	allgroups="$(getattr "(&(objectClass=person)(uid=$username))" memberOf)"
 	echo "dn: cn=$username,ou=people,$basedn
 changetype: moddn
 newrdn: cn=$newusername
@@ -501,13 +406,8 @@ uid: $newusername" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
 
 	for a in $allgroups
 	do
-		echo "dn: $a
-changetype: modify
-delete: memberUid
-memberUid: $username
--
-add: memberUid
-memberUid: $newusername" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+		groupset delete $username "$a"
+		groupset add $newusername "$a"
 	done
 
     username=$newusername

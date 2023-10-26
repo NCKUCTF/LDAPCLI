@@ -2,15 +2,26 @@
 
 printhelp()
 {
-	echo "Usage: $0 [options] LOGIN
+	echo "Usage: $0 [options] KEYNAME USERNAME
 
 Options:
   -h, --help                    display this help message and exit
   -f, --bindfile				set url,binddn,bindpasswd with file
   -H, --url URL					LDAP Uniform Resource Identifier(s)
   -D, --binddn DN				bind DN
-  -w, --bindpasswd PASSWORD		bind password"
-	exit 0
+  -w, --bindpasswd PASSWORD		bind password" 1>&2
+	exit 1
+}
+
+setattr()
+{
+    cmd=$1
+    attrname=$2
+    attrdata=$3
+    echo "dn: cn=$keyname,cn=$username,ou=people,$basedn
+changetype: modify
+$cmd: $attrname
+$attrname: $attrdata" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
 }
 
 getattr()
@@ -25,13 +36,30 @@ getattr()
     ldapsearch -x $ldapurl -D "$binddn" -w "$bindpasswd" -b "$subbasedn$basedn" "$filter" "$attrname" -LLL | grep -P "^$attrname:" | cut -d ' ' -f 2-
 }
 
+getindex()
+{
+    allindex="$(getattr "" ipindex "ou=people" | sort -n)"
+
+    tmpindex=1
+    for a in $allindex
+    do
+        if [ $a -eq $tmpindex ]
+        then
+            tmpindex=$(($tmpindex+1))
+        else
+            break
+        fi
+    done
+    echo "$tmpindex"
+}
+
 argnum=$#
 if [ $argnum -eq 0 ]
 then
 	printhelp
-	exit 0
 fi
 
+keyname=""
 username=""
 url=""
 binddn=""
@@ -62,7 +90,7 @@ do
 							bindpasswd=""
 						fi
 						;;
-				-H|--url)
+                -H|--url)
                         shift
                         url=$1
                         ;;
@@ -79,15 +107,24 @@ do
                         then
                                 break
                         fi
-						username=$1
+                        if [ "$keyname" == "" ]
+                        then
+						    keyname=$1
+                        elif [ "$username" == "" ]
+                        then
+                            username=$1
+                        else
+                            echo "Bad args ..." 1>&2
+                            printhelp
+                        fi
                         ;;
         esac
         shift
 done
 
-if [ "$username" = "" ] || [ "$binddn" = "" ]
+if [ "$keyname" = "" ] || [ "$username" = "" ] || [ "$binddn" = "" ]
 then
-	echo "Please add your username and ldapbinddn."
+	echo "Please add your keyname, username and ldapbinddn." 1>&2
 	printhelp
 fi
 
@@ -103,37 +140,32 @@ fi
 
 basedn=$(echo $(for a in $(echo "$binddn" | sed "s/,/ /g"); do  printf "%s," $(echo $a | grep dc=); done) | sed "s/^,//g" | sed "s/,$//g")
 
-groupsdn=$(getattr "(&(objectClass=person)(uid=$username))" memberOf)
+checkname="$(getattr "" cn "cn=$keyname,ou=wireguard,cn=$username,ou=people" 2>/dev/null)"
 
-gid=$(getattr "(&(objectClass=person)(uid=$username))" gidNumber)
-
-if [ "$gid" == "" ]
+if ! hash wg &>/dev/null
 then
-    echo "username no exist!" 1>&2
+    echo "Please install wireguard!" 1>&2
     exit 1
 fi
 
-gidgroupdn=$(getattr "(&(objectClass=posixGroup)(gidNumber=$gid))" dn)
-
-IFS="
-"
-for a in $groupsdn
-do
-	echo "dn: $a
-changetype: modify
-delete: memberUid
-memberUid: $username
--
-delete: member
-member: cn=$username,ou=people,$basedn" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
-done
-unset IFS
-
-if [ "$(getattr "(&(objectClass=posixGroup)(gidNumber=$gid))" memberUid)" = "" ]
+if [ "$checkname" != "" ]
 then
-	ldapdelete -x $ldapurl -D "$binddn" -w "$bindpasswd" $gidgroupdn
+    echo "Keyname exist!" 1>&2
+    exit 1
 else
-	echo "$0: group $(getattr "(&(objectClass=posixGroup)(gidNumber=$gid))" cn) not removed because it has other members."
+    echo "dn: ou=wireguard,cn=$username,ou=people,$basedn
+objectClass: organizationalUnit
+ou: wireguard" | ldapadd -x $ldapurl -D "$binddn" -w "$bindpasswd"
+
+    echo "dn: cn=$keyname,ou=wireguard,cn=$username,ou=people,$basedn
+objectClass: wireguardKey
+cn: $keyname
+ipindex: $(getindex)
+wgprivkey: $(wg genkey)" | ldapadd -x $ldapurl -D "$binddn" -w "$bindpasswd"
 fi
 
-ldapdelete -r -x $ldapurl -D "$binddn" -w "$bindpasswd" "cn=$username,ou=people,$basedn"
+
+
+
+
+
