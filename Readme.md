@@ -20,7 +20,7 @@ bash initldapschema.sh <your DC> <olcDatabase file>
 
 4. setup all ou
 ```
-slapadd -b <dc> -l <(sed 's/dc=.*/<dc>/g' base.ldif)
+bash -c "slapadd -b <dc> -l <(sed 's/dc=.*/<dc>/g' base.ldif)"
 ```
 
 ## Setup ldap ssh public key login in client
