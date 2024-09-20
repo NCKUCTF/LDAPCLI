@@ -267,6 +267,15 @@ smbldap-usermod -H '[UX]' "$username"
 
 echo "dn: cn=$username,ou=people,$basedn
 changetype: modify
+replace: sambaPwdMustChange
+sambaPwdMustChange: 0" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+
+echo "dn: cn=$username,ou=people,$basedn
+changetype: modify
+delete: shadowMax" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
+
+echo "dn: cn=$username,ou=people,$basedn
+changetype: modify
 replace: displayName
 displayName: $displayName" | ldapmodify -x $ldapurl -D "$binddn" -w "$bindpasswd"
 
